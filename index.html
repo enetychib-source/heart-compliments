@@ -33,37 +33,30 @@
 
     .compliment-word {
       position: absolute;
-      transform: translate(-50%, -50%);
+      transform: translateY(-50%);
       white-space: nowrap;
+      line-height: 1;
       font-weight: 700;
       user-select: none;
       animation: glow 2.5s infinite alternate ease-in-out;
     }
 
     @keyframes heartbeat {
-      0%, 100% {
-        transform: scale(1);
-      }
-      15% {
-        transform: scale(1.06);
-      }
-      30% {
-        transform: scale(1);
-      }
-      45% {
-        transform: scale(1.03);
-      }
+      0%, 100% { transform: scale(1); }
+      15%      { transform: scale(1.06); }
+      30%      { transform: scale(1); }
+      45%      { transform: scale(1.03); }
     }
 
     @keyframes glow {
       0% {
         color: #ff2a2a;
-        text-shadow: 0 0 6px rgba(255, 42, 42, 0.7);
-        opacity: 0.78;
+        text-shadow: 0 0 4px rgba(255, 42, 42, 0.6);
+        opacity: 0.8;
       }
       100% {
         color: #ff6b4a;
-        text-shadow: 0 0 14px rgba(255, 90, 50, 1);
+        text-shadow: 0 0 8px rgba(255, 90, 50, 0.9);
         opacity: 1;
       }
     }
@@ -94,39 +87,111 @@
       "Твоя улыбка"
     ];
 
+    const ROWS = 18; // Количество строк в сердце
+
+    // Границы области сердца: (x^2 + y^2 - 1)^3 - x^2 * y^3 <= 0
+    const X_MIN = -1.2, X_MAX = 1.2;
+    const Y_MIN = -1.02, Y_MAX = 1.26;
+
     const wrapper = document.getElementById('heart-wrapper');
-    const rows = 24; // Больше строк — плотнее заполнение
-    const cols = 16; // Меньше колонок — больше места для длинных слов
+    const ctx = document.createElement('canvas').getContext('2d');
+    const fontFamily = getComputedStyle(document.body).fontFamily;
 
-    // Математическая формула сердца: (x^2 + y^2 - 1)^3 - x^2 * y^3 <= 0
-    for (let r = 0; r < rows; r++) {
-      const y = 1.25 - (r / (rows - 1)) * 2.55;
+    const inside = (x, y) => Math.pow(x * x + y * y - 1, 3) - x * x * y * y * y <= 0;
 
-      for (let c = 0; c < cols; c++) {
-        const x = -1.3 + (c / (cols - 1)) * 2.6;
+    // Отрезки строки, которые целиком лежат внутри сердца (сверху и снизу строки)
+    function segmentsAt(yTop, yBottom) {
+      const steps = 600;
+      const dx = (X_MAX - X_MIN) / steps;
+      const segments = [];
+      let start = null;
 
-        const formula = Math.pow(x * x + y * y - 1, 3) - (x * x * Math.pow(y, 3));
+      for (let i = 0; i <= steps; i++) {
+        const x = X_MIN + i * dx;
+        const ok = inside(x, yTop) && inside(x, yBottom);
+        if (ok && start === null) start = x;
+        if ((!ok || i === steps) && start !== null) {
+          segments.push([start, ok ? x : x - dx]);
+          start = null;
+        }
+      }
+      return segments;
+    }
 
-        if (formula <= 0) {
-          const span = document.createElement('span');
-          span.className = 'compliment-word';
-          span.textContent = compliments[Math.floor(Math.random() * compliments.length)];
+    function build() {
+      wrapper.innerHTML = '';
 
-          const leftPercent = ((x + 1.3) / 2.6) * 100;
-          const topPercent = ((1.25 - y) / 2.55) * 100;
+      const W = wrapper.clientWidth;
+      const H = wrapper.clientHeight;
+      const rowH = H / ROWS;
+      const fontSize = rowH * 0.68;
+      const gap = fontSize * 0.5;           // минимальный отступ между словами
+      const scaleX = W / (X_MAX - X_MIN);
+      const dy = (Y_MAX - Y_MIN) / ROWS;
 
-          span.style.left = `${leftPercent}%`;
-          span.style.top = `${topPercent}%`;
+      ctx.font = `700 ${fontSize}px ${fontFamily}`;
+      const width = (w) => ctx.measureText(w).width;
 
-          // Размер шрифта подстроен под комплименты на телефоне
-          const fontSize = (1.15 + Math.random() * 0.55).toFixed(2);
-          span.style.fontSize = `${fontSize}vmin`;
-          span.style.animationDelay = `${(Math.random() * 2).toFixed(2)}s`;
+      let last = '';
 
-          wrapper.appendChild(span);
+      for (let r = 0; r < ROWS; r++) {
+        const yCenter = Y_MAX - (r + 0.5) * dy;
+        const segments = segmentsAt(yCenter + dy * 0.35, yCenter - dy * 0.35);
+        const topPx = (r + 0.5) * rowH;
+
+        for (const [a, b] of segments) {
+          const x0 = (a - X_MIN) * scaleX;
+          const segW = (b - a) * scaleX;
+
+          // Набираем слова, пока они помещаются в строку
+          const words = [];
+          let used = 0;
+          while (true) {
+            const extra = words.length ? gap : 0;
+            const remaining = segW - used - extra;
+            const fit = compliments.filter(w => w !== last && width(w) <= remaining);
+            if (!fit.length) break;
+            const w = fit[Math.floor(Math.random() * fit.length)];
+            used += extra + width(w);
+            words.push(w);
+            last = w;
+          }
+
+          if (!words.length) {
+            if (width('♥') <= segW) words.push('♥');
+            else continue;
+          }
+
+          // Равномерно распределяем слова по строке — без наложений
+          const widths = words.map(width);
+          const total = widths.reduce((s, v) => s + v, 0);
+          const space = (segW - total) / (words.length + 1);
+          let x = x0 + space;
+
+          words.forEach((w, i) => {
+            const span = document.createElement('span');
+            span.className = 'compliment-word';
+            span.textContent = w;
+            span.style.left = `${x}px`;
+            span.style.top = `${topPx}px`;
+            span.style.fontSize = `${fontSize}px`;
+            span.style.animationDelay = `${(Math.random() * 2).toFixed(2)}s`;
+            wrapper.appendChild(span);
+            x += widths[i] + space;
+          });
         }
       }
     }
+
+    build();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(build);
+
+    // Перестраиваем при повороте экрана / изменении размера окна
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(build, 150);
+    });
   </script>
 </body>
 </html>
